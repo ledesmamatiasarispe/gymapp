@@ -50,3 +50,25 @@ def test_migra_entrenamientos_viejos(tmp_path, monkeypatch):
     # y las rutinas ganan el aumento sugerido de carga
     assert "aumento_pct" in {c[1] for c in conn.execute("PRAGMA table_info(rutinas)")}
     conn.close()
+
+
+def test_prescripciones_de_texto_pasan_a_campos(tmp_path, monkeypatch):
+    """Ítems guardados cuando la prescripción era solo texto: al arrancar se estructuran."""
+    db = tmp_path / "items.db"
+    monkeypatch.setattr(config, "DB_PATH", db)
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE rutina_items (id INTEGER PRIMARY KEY, bloque_id INTEGER NOT NULL, orden INTEGER NOT NULL,
+            ejercicio_id INTEGER, nombre_libre TEXT, prescripcion TEXT, comentario TEXT, superserie INTEGER);
+        INSERT INTO rutina_items (id, bloque_id, orden, nombre_libre, prescripcion) VALUES
+            (1, 1, 0, 'Plancha', '3x15´´'), (2, 1, 1, 'Sentadilla', '3x10 c/lado'),
+            (3, 1, 2, 'Burpees', 'al fallo'), (4, 1, 3, 'Caminata', NULL);
+    """)
+    conn.close()
+    init_db()
+    init_db()
+    conn = sqlite3.connect(db)
+    filas = conn.execute("SELECT modalidad, series, reps, segundos, por_lado, prescripcion FROM rutina_items ORDER BY id").fetchall()
+    assert filas == [("tiempo", 3, None, 15, 0, "3 × 15 seg"), ("reps", 3, 10, None, 1, "3 × 10 reps c/lado"),
+                     ("libre", None, None, None, 0, "al fallo"), ("libre", None, None, None, 0, None)]
+    conn.close()

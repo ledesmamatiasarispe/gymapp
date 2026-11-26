@@ -38,6 +38,8 @@ class ItemHecho(BaseModel):
     hecho: bool = False
     carga: str | None = None
     nota: str | None = None
+    esfuerzo: int | None = Field(None, ge=1, le=10)  # cómo se sintió al terminar ese ejercicio
+    peso_kg: float | None = Field(None, gt=0, le=1000)  # con cuánto peso lo hizo
 
 
 class Cierre(BaseModel):
@@ -115,15 +117,17 @@ def _abrir_o_retomar(conn, user: dict, dia, fecha: date) -> int:
 def _guardar_item(conn, eid: int, item: ItemHecho, nombre: str) -> None:
     """Alta, corrección o baja (si quedó vacío) del registro de un ejercicio."""
     carga, nota = _limpio(item.carga), _limpio(item.nota)
-    if not (item.hecho or carga or nota):
+    if not (item.hecho or carga or nota or item.esfuerzo or item.peso_kg):
         conn.execute("DELETE FROM entrenamiento_items WHERE entrenamiento_id = ? AND item_id = ?", (eid, item.item_id))
         return
     conn.execute(
-        """INSERT INTO entrenamiento_items (entrenamiento_id, item_id, ejercicio_nombre, hecho, carga, nota)
-           VALUES (?,?,?,?,?,?)
+        """INSERT INTO entrenamiento_items (entrenamiento_id, item_id, ejercicio_nombre, hecho, carga, nota, esfuerzo, peso_kg)
+           VALUES (?,?,?,?,?,?,?,?)
            ON CONFLICT (entrenamiento_id, item_id)
-           DO UPDATE SET hecho = excluded.hecho, carga = excluded.carga, nota = excluded.nota""",
-        (eid, item.item_id, nombre, int(item.hecho), carga, nota))
+           DO UPDATE SET hecho = excluded.hecho, carga = excluded.carga, nota = excluded.nota,
+                         esfuerzo = excluded.esfuerzo, peso_kg = excluded.peso_kg""",
+        (eid, item.item_id, nombre, int(item.hecho), carga, nota, item.esfuerzo,
+         round(item.peso_kg, 2) if item.peso_kg else None))
 
 
 def _descartar_si_vacia(conn, eid: int) -> bool:
@@ -208,11 +212,12 @@ def ultimas_cargas(rutina_id: int, conn=Depends(get_db), user=Depends(usuario_ac
     if r["alumno_id"] is None:
         return {}
     filas = conn.execute(
-        """SELECT ei.item_id, ei.carga, e.fecha FROM entrenamiento_items ei
+        """SELECT ei.item_id, ei.carga, ei.peso_kg, e.fecha FROM entrenamiento_items ei
            JOIN entrenamientos e ON e.id = ei.entrenamiento_id
-           WHERE e.rutina_id = ? AND e.alumno_id = ? AND ei.carga IS NOT NULL AND e.terminado_en IS NOT NULL
+           WHERE e.rutina_id = ? AND e.alumno_id = ? AND (ei.carga IS NOT NULL OR ei.peso_kg IS NOT NULL)
+                 AND e.terminado_en IS NOT NULL
            ORDER BY e.fecha, e.id""", (rutina_id, r["alumno_id"]))
-    return {str(f["item_id"]): {"carga": f["carga"], "fecha": f["fecha"]} for f in filas}
+    return {str(f["item_id"]): {"carga": f["carga"], "peso_kg": f["peso_kg"], "fecha": f["fecha"]} for f in filas}
 
 
 @router.get("/alumnos/{alumno_id}/entrenamientos")

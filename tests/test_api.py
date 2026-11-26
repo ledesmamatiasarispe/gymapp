@@ -62,12 +62,12 @@ def test_editar_preserva_ids_y_borra_lo_quitado(client, gimnasio):
     dia = rut["dias"][0]
     item_id = dia["bloques"][0]["items"][0]["id"]
     dia["bloques"][0]["items"] = dia["bloques"][0]["items"][:1]  # quito el segundo
-    dia["bloques"][0]["items"][0]["prescripcion"] = "4x20´´"
+    dia["bloques"][0]["items"][0].update(series=4, segundos=20)
     r = client.put(f"/api/rutinas/{rut['id']}", headers=h["profe1"],
                    json={"titulo": rut["titulo"], "dias": rut["dias"]})
     assert r.status_code == 200, r.text
     items = r.json()["dias"][0]["bloques"][0]["items"]
-    assert [(i["id"], i["prescripcion"]) for i in items] == [(item_id, "4x20´´")]
+    assert [(i["id"], i["modalidad"], i["prescripcion"]) for i in items] == [(item_id, "tiempo", "4 × 20 seg")]
 
 
 def test_ejercicio_inexistente_o_vacio(client, gimnasio):
@@ -98,7 +98,7 @@ def test_plantilla_duplicada_sobre_alumno(client, gimnasio):
 def test_aumento_sugerido_lo_fija_el_profe(client, gimnasio):
     h, ids, ej = gimnasio["h"], gimnasio["ids"], gimnasio["ejercicios"]
     rut = _rutina(client, h["profe1"], ids["alu1"], ej)
-    assert rut["aumento_pct"] is None  # por defecto: 1 kg más
+    assert rut["aumento_pct"] is None  # por defecto: sin sugerencia
     url, base = f"/api/rutinas/{rut['id']}", {"titulo": rut["titulo"], "dias": rut["dias"]}
     assert client.put(url, headers=h["profe1"], json={**base, "aumento_pct": 5}).json()["aumento_pct"] == 5
     # un cliente que no manda el campo no lo pisa
@@ -318,3 +318,64 @@ def test_tutoriales_vistos_se_guardan_por_usuario(client, gimnasio):
     assert client.post("/api/auth/tutoriales/entrenar", headers=h["alu1"]).json() == ["mi-rutina", "entrenar"]
     assert client.get("/api/auth/tutoriales", headers=h["alu2"]).json() == []  # cada uno los suyos
     assert client.post("/api/auth/tutoriales/<script>", headers=h["alu1"]).status_code in (404, 422)
+
+
+def test_prescripcion_estructurada(client, gimnasio):
+    h, ids, ej = gimnasio["h"], gimnasio["ids"], gimnasio["ejercicios"]
+    rut = _rutina(client, h["profe1"], ids["alu1"], ej)
+    # El texto viejo («3x15´´», «3x10») se convierte en campos al guardar.
+    a, b = rut["dias"][0]["bloques"][0]["items"]
+    assert (a["modalidad"], a["series"], a["segundos"], a["prescripcion"]) == ("tiempo", 3, 15, "3 × 15 seg")
+    assert (b["modalidad"], b["series"], b["reps"], b["prescripcion"]) == ("reps", 3, 10, "3 × 10 reps")
+
+    items = [
+        {"ejercicio_id": ej[0], "modalidad": "reps", "series": 3, "reps": 8, "reps_max": 12, "por_lado": True},
+        {"ejercicio_id": ej[1], "modalidad": "tiempo", "series": 2, "segundos": 90},
+        {"ejercicio_id": ej[0], "modalidad": "libre", "prescripcion": "Al fallo"},
+    ]
+    dias = [{"nombre": "D1", "bloques": [{"nombre": "B", "items": items}]}]
+    r = client.put(f"/api/rutinas/{rut['id']}", headers=h["profe1"], json={"titulo": "x", "dias": dias})
+    assert r.status_code == 200, r.text
+    got = r.json()["dias"][0]["bloques"][0]["items"]
+    assert [i["prescripcion"] for i in got] == ["3 × 8–12 reps c/lado", "2 × 1 min 30 seg", "Al fallo"]
+    assert got[2]["series"] is None and got[0]["por_lado"] == 1
+
+    items[0]["reps_max"] = 6  # rango al revés
+    r = client.put(f"/api/rutinas/{rut['id']}", headers=h["profe1"], json={"titulo": "x", "dias": dias})
+    assert r.status_code == 422 and "hasta" in r.json()["detail"]
+
+
+def test_esfuerzo_por_ejercicio(client, gimnasio):
+    h, ids, ej = gimnasio["h"], gimnasio["ids"], gimnasio["ejercicios"]
+    rut = _rutina(client, h["profe1"], ids["alu1"], ej)
+    client.post(f"/api/rutinas/{rut['id']}/estado", headers=h["profe1"], json={"estado": "publicada"})
+    dia = rut["dias"][0]
+    item = dia["bloques"][0]["items"][0]["id"]
+    base = {"dia_id": dia["id"], "fecha": date.today().isoformat(), "item_id": item}
+    r = client.put("/api/entrenamientos/item", headers=h["alu1"], json={**base, "hecho": True, "carga": "3 × 20 seg", "esfuerzo": 7})
+    assert r.status_code == 200, r.text
+    assert client.put("/api/entrenamientos/item", headers=h["alu1"], json={**base, "hecho": True, "esfuerzo": 11}).status_code == 422
+    sesion = client.get(f"/api/dias/{dia['id']}/entrenamiento", headers=h["alu1"]).json()
+    assert [(i["carga"], i["esfuerzo"]) for i in sesion["items"]] == [("3 × 20 seg", 7)]
+
+
+def test_peso_indicado_y_registrado(client, gimnasio):
+    h, ids, ej = gimnasio["h"], gimnasio["ids"], gimnasio["ejercicios"]
+    rut = _rutina(client, h["profe1"], ids["alu1"], ej)
+    rut["dias"][0]["bloques"][0]["items"][1]["peso_kg"] = "12,5"
+    r = client.put(f"/api/rutinas/{rut['id']}", headers=h["profe1"], json={"titulo": rut["titulo"], "dias": rut["dias"]})
+    assert r.status_code == 200, r.text
+    dia = r.json()["dias"][0]
+    item = dia["bloques"][0]["items"][1]
+    assert item["peso_kg"] == 12.5 and dia["bloques"][0]["items"][0]["peso_kg"] is None
+    rut["dias"][0]["bloques"][0]["items"][1]["peso_kg"] = "mucho"
+    r = client.put(f"/api/rutinas/{rut['id']}", headers=h["profe1"], json={"titulo": rut["titulo"], "dias": rut["dias"]})
+    assert r.status_code == 422 and "peso" in r.json()["detail"]
+
+    client.post(f"/api/rutinas/{rut['id']}/estado", headers=h["profe1"], json={"estado": "publicada"})
+    base = {"dia_id": dia["id"], "fecha": date.today().isoformat(), "item_id": item["id"]}
+    r = client.put("/api/entrenamientos/item", headers=h["alu1"], json={**base, "hecho": True, "carga": "3 × 10 reps", "peso_kg": 15})
+    assert r.status_code == 200, r.text
+    client.put("/api/entrenamientos/cierre", headers=h["alu1"], json={"dia_id": dia["id"], "fecha": base["fecha"]})
+    ult = client.get(f"/api/rutinas/{rut['id']}/ultimas-cargas", headers=h["alu1"]).json()
+    assert ult[str(item["id"])]["peso_kg"] == 15 and ult[str(item["id"])]["carga"] == "3 × 10 reps"

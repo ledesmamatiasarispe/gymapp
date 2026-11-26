@@ -462,12 +462,49 @@ function urlMiniatura(miniatura, videoUrl) {
 }
 
 /** El cuadradito del número, o la miniatura con el número encima. Si la imagen no carga, queda el número. */
-function htmlNro(numero, miniatura, videoUrl, { titulo = '' } = {}) {
+function htmlNro(numero, miniatura, videoUrl, { titulo = '', tocable = true } = {}) {
   const mini = urlMiniatura(miniatura, videoUrl);
   if (!mini) return `<div class="nro">${esc(numero ?? '·')}</div>`;
-  return `<div class="nro con-mini" ${videoUrl ? `data-video="${esc(videoUrl)}" data-titulo="${esc(titulo)}"` : ''}>
+  return `<div class="nro con-mini" ${videoUrl && tocable ? `data-video="${esc(videoUrl)}" data-titulo="${esc(titulo)}"` : ''}>
     <img src="${esc(mini)}" alt="" loading="lazy" onerror="this.parentNode.classList.remove('con-mini');this.remove()">
     <span>${esc(numero ?? '·')}</span></div>`;
+}
+
+/** Pone el video en `marco` (.video-marco) y lo arranca solo. Drive: primero el archivo directo
+ * en un <video>, que puede arrancar solo; si Drive no lo entrega (no es público), su visor
+ * embebido, que pide tocar su ▶. YouTube: el reproductor embebido con autoplay. */
+/** El recuadro toma la forma del video (los de celular son verticales): sin esto, un video
+ * vertical en un recuadro 16:9 queda cortado. El alto no pasa del 60 % de la pantalla. */
+function ajustarMarco(marco, ancho, alto) {
+  if (!ancho || !alto) return;
+  marco.style.aspectRatio = `${ancho} / ${alto}`;
+  marco.style.width = `min(100%, calc(60dvh * ${(ancho / alto).toFixed(4)}))`;
+  marco.style.marginInline = 'auto';
+}
+
+function montarVideo(marco, url) {
+  const v = idVideo(url);
+  const iframe = src => {
+    marco.innerHTML = `<iframe ${!ES_PC && src.includes('drive.google.com') ? 'class="escalado"' : ''} src="${esc(src)}" allow="autoplay; fullscreen" allowfullscreen></iframe>`;
+  };
+  if (v?.youtube) { iframe(`https://www.youtube.com/embed/${v.youtube}?autoplay=1&playsinline=1`); return; }
+  if (!v?.drive) return;
+  // La forma se saca de la miniatura de Drive (sirve también cuando termina en su visor embebido)
+  // y, si el archivo carga directo, del video mismo.
+  const mini = new Image();
+  mini.onload = () => ajustarMarco(marco, mini.naturalWidth, mini.naturalHeight);
+  mini.src = `https://drive.google.com/thumbnail?id=${encodeURIComponent(v.drive)}&sz=w640`;
+  marco.innerHTML = `<video controls playsinline preload="auto"
+    src="https://drive.usercontent.google.com/download?id=${esc(v.drive)}&export=download"></video>`;
+  const vid = $('video', marco);
+  let cambiado = false;
+  const alVisor = () => { if (!cambiado) { cambiado = true; iframe(urlEmbebida(url)); } };
+  vid.addEventListener('error', alVisor);
+  vid.addEventListener('loadedmetadata', () => ajustarMarco(marco, vid.videoWidth, vid.videoHeight));
+  // Sin sonido el navegador siempre deja arrancar; con sonido, solo si viene de un toque.
+  vid.play().catch(e => {
+    if (e.name === 'NotAllowedError') { vid.muted = true; vid.play().catch(() => {}); }
+  });
 }
 
 function abrirVideo(url, titulo) {
@@ -476,9 +513,10 @@ function abrirVideo(url, titulo) {
   modal(`<div class="titulo-fila" style="margin-bottom:10px"><h3 style="margin:0">${esc(titulo)}</h3><div class="spacer"></div>
     <a class="btn-chico" href="${esc(url)}" target="_blank" rel="noopener">Abrir aparte</a>
     <button class="btn-chico" onclick="cerrarModal()">Cerrar</button></div>
-    <div class="video-marco"><iframe src="${esc(emb)}" allow="autoplay; fullscreen" allowfullscreen></iframe></div>
+    <div class="video-marco" data-marco></div>
     <p class="sub" style="margin-top:8px">¿No carga? Tocá «Abrir aparte». Si tampoco se ve ahí, el video no está compartido
       como «cualquier persona con el enlace»: avisale a tu profe.</p>`, { ancho: true });
+  montarVideo($('#modal [data-marco]'), url);
 }
 
 document.addEventListener('click', e => {
@@ -486,17 +524,31 @@ document.addEventListener('click', e => {
   if (b) { e.preventDefault(); abrirVideo(b.dataset.video, b.dataset.titulo || 'Video'); }
 });
 
+/** En la PC (mouse) se entrena con botones; en el celular, deslizando. */
+const ES_PC = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+/** 12.5 → «12,5 kg». */
+const kg = n => (n == null || n === '' ? '' : `${String(+n).replace('.', ',')} kg`);
+/** Lo que el alumno tiene que hacer: la prescripción y, si el profe lo puso, el peso. */
+const prescConPeso = it => [it.prescripcion, it.peso_kg ? `con ${kg(it.peso_kg)}` : null].filter(Boolean).join(' · ');
+/** Lo registrado (o lo de la última vez): cuánto, con qué peso. */
+const cargaConPeso = r => [r?.carga, r?.peso_kg ? kg(r.peso_kg) : null].filter(Boolean).join(' · ');
+
 function htmlItem(it, { cargas = {}, registro = null } = {}) {
-  const video = it.video_url
+  // Entrenando, el video se ve en Comenzar: la tarjeta no tiene play propio ni miniatura tocable.
+  const video = it.video_url && !registro
     ? `<button class="btn-video" data-video="${esc(it.video_url)}" data-titulo="${esc(nombreItem(it))}" title="Ver video">${ICON.play}</button>` : '<span></span>';
   const ult = cargas[it.id];
   const reg = registro?.[it.id];
   return `<div class="item ${registro ? 'entrenar' : ''} ${reg?.hecho ? 'hecho' : ''}" data-item="${it.id}">
-    ${htmlNro(it.ejercicio_numero, it.ejercicio_miniatura, it.video_url, { titulo: nombreItem(it) })}
-    <div><div class="nombre" data-info="${it.id}">${esc(nombreItem(it))}</div>${it.prescripcion ? `<div class="presc">${esc(it.prescripcion)}</div>` : ''}</div>
+    ${htmlNro(it.ejercicio_numero, it.ejercicio_miniatura, it.video_url, { titulo: nombreItem(it), tocable: !registro })}
+    <div><div class="nombre" ${registro ? '' : `data-info="${it.id}"`}>${esc(nombreItem(it))}</div>${prescConPeso(it) ? `<div class="presc">${esc(prescConPeso(it))}</div>` : ''}</div>
     ${video}
     ${it.comentario ? `<div class="coment">${esc(it.comentario)}</div>` : ''}
-    ${ult ? `<div class="ultima">Última vez (${fecha(ult.fecha)}): ${esc(ult.carga)}</div>` : ''}
+    ${ult ? `<div class="ultima">Última vez (${fecha(ult.fecha)}): ${esc(cargaConPeso(ult))}</div>` : ''}
+    ${registro && ES_PC ? `<div class="acciones-pc">${reg?.hecho
+      ? `<button type="button" class="btn-ghost" data-editar="${it.id}">Editar registro</button>`
+      : `<button type="button" class="btn btn-verde" data-comenzar="${it.id}">▶ Comenzar</button>`}</div>` : ''}
     ${registro ? `<div class="registro" data-registro="${it.id}" ${reg?.hecho ? '' : 'hidden'}>${htmlRegistro(reg)}</div>
       <div class="estado-item" data-estado="${it.id}"></div>` : ''}
   </div>`;
@@ -504,27 +556,8 @@ function htmlItem(it, { cargas = {}, registro = null } = {}) {
 
 /** Lo registrado hoy, en la tarjeta (modo entrenar). Se registra y se corrige deslizando: no hay botón. */
 function htmlRegistro(r) {
-  const detalle = [r?.carga, r?.nota].filter(Boolean).map(esc).join(' · ');
+  const detalle = [cargaConPeso(r) && esc(cargaConPeso(r)), r?.esfuerzo && `sensación ${r.esfuerzo}/10`, r?.nota && esc(r.nota)].filter(Boolean).join(' · ');
   return `<span class="check on">✓</span><span class="registro-texto">${detalle ? `Hoy: ${detalle}` : 'Hecho'}</span>`;
-}
-
-/** La carga a sugerir a partir de la última: `pct` por ciento más (lo fija el profe en la rutina),
- * redondeado a medio kilo y subiendo al menos eso; sin `pct`, un kilo más; con 0, ninguna sugerencia.
- * "8 kg" → "9 kg", "3x12 7,5kg" → "3x12 8,5kg", "8" → "9". Si no queda claro qué número son los
- * kilos (por ejemplo "3x12"), null. */
-function sugerirCarga(carga, pct = null) {
-  if (!carga || pct === 0) return null;
-  const NUM = /\d+(?:[.,]\d+)?/;
-  const sumar = m => {
-    const n = parseFloat(m.replace(',', '.'));
-    const nuevo = pct == null ? n + 1 : Math.max(Math.round(n * (1 + pct / 100) * 2) / 2, n + 0.5);
-    const s = String(Math.round(nuevo * 100) / 100);
-    return m.includes(',') || (s.includes('.') && carga.includes(',')) ? s.replace('.', ',') : s;
-  };
-  const kilos = new RegExp(`${NUM.source}(?=\\s*(kg|kilo))`, 'i');
-  if (kilos.test(carga)) return carga.replace(kilos, sumar);
-  if (/^\s*\d+(?:[.,]\d+)?\s*$/.test(carga)) return carga.replace(NUM, sumar);
-  return null;
 }
 
 function htmlDia(dia, opts = {}) {
@@ -582,7 +615,7 @@ function htmlHistorial(lista) {
     </summary><div class="cuerpo">
       ${e.nota ? `<div class="nota">“${esc(e.nota)}”</div>` : ''}
       <ul>${e.items.map(i => `<li><span style="color:${i.hecho ? 'var(--green)' : 'var(--muted)'}">${i.hecho ? '✓' : '·'}</span>
-        <span style="flex:1">${esc(i.ejercicio_nombre)}</span><span class="sub">${esc(i.carga || '')}</span></li>`).join('')
+        <span style="flex:1">${esc(i.ejercicio_nombre)}</span><span class="sub">${esc(cargaConPeso(i))}</span>${i.esfuerzo ? `<span class="badge" style="color:var(--yellow)" title="Cómo se sintió">${i.esfuerzo}/10</span>` : ''}</li>`).join('')
         || '<li class="sub">Sin detalle por ejercicio</li>'}</ul>
     </div></details>`;
   }).join('');
@@ -590,31 +623,57 @@ function htmlHistorial(lista) {
 
 const itemsPorId = dias => Object.fromEntries(dias.flatMap(d => d.bloques.flatMap(b => b.items)).map(i => [i.id, i]));
 
+/** Botonera 1 a 10 de esfuerzo percibido (la misma del cierre de la sesión). */
+const htmlEsfuerzo = sel => `<div class="esfuerzo" role="group" aria-label="Esfuerzo del 1 al 10">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n =>
+  `<button type="button" data-esf="${n}" class="${sel === n ? 'on' : ''}" aria-pressed="${sel === n}">${n}</button>`).join('')}</div>`;
+
 /** Ficha de un ejercicio: video, indicación del profe, técnica y última carga.
- * Con `alMarcar`, ofrece registrarlo desde ahí (modo entrenar). */
-function abrirInfo(it, { cargas = {}, hecho = false, alMarcar = null } = {}) {
+ * Con `alMarcar`, ofrece registrarlo desde ahí (modo entrenar). Con `cronometro`, arriba
+ * de todo cuenta el tiempo desde que se abrió (el «Comenzar» de la PC). */
+function abrirInfo(it, { cargas = {}, hecho = false, alMarcar = null, cronometro = false } = {}) {
   const emb = urlEmbebida(it.video_url);
   const ult = cargas[it.id];
   const seccion = (titulo, texto) => texto
     ? `<div class="info-seccion"><div class="info-titulo">${titulo}</div><p>${esc(texto)}</p></div>` : '';
+  const objetivo = it.modalidad === 'tiempo' && it.segundos ? it.segundos : null;
   const m = modal(`
+    ${cronometro ? `<div class="cronometro">
+      <span class="crono-etiqueta">Tiempo</span>
+      <span class="crono-valor" data-crono role="timer" aria-label="Tiempo transcurrido">0:00</span>
+      ${objetivo ? `<span class="crono-objetivo" data-objetivo>Objetivo por serie: ${esc(duracionTexto(objetivo))}</span>` : ''}
+      <button type="button" class="btn-chico" data-reiniciar>Reiniciar</button></div>` : ''}
     <div class="titulo-fila" style="margin-bottom:8px;flex-wrap:nowrap">
       <div class="nro-grande">${esc(it.ejercicio_numero ?? '·')}</div>
       <div style="flex:1;min-width:0"><h3 style="margin:0">${esc(nombreItem(it))}</h3>
         ${it.ejercicio_grupo ? `<div class="sub">${esc(it.ejercicio_grupo)}</div>` : ''}</div>
       <button class="btn-chico" data-cerrar>✕</button></div>
-    ${it.prescripcion ? `<div class="presc-grande">${esc(it.prescripcion)}</div>` : ''}
-    ${emb ? `<div class="video-marco" style="margin:10px 0"><iframe src="${esc(emb)}" allow="autoplay; fullscreen" allowfullscreen></iframe></div>
+    ${prescConPeso(it) ? `<div class="presc-grande">${esc(prescConPeso(it))}</div>` : ''}
+    ${emb ? `<div class="video-marco" style="margin:10px 0" data-marco></div>
              <p class="sub">¿No carga el video? <a href="${esc(it.video_url)}" target="_blank" rel="noopener">Abrilo aparte</a>.</p>`
           : it.video_url ? `<p><a class="btn-ghost" href="${esc(it.video_url)}" target="_blank" rel="noopener">▶ Ver video</a></p>` : ''}
     ${seccion('Indicación del profe', it.comentario)}
     ${seccion('Técnica', it.ejercicio_descripcion)}
-    ${ult ? seccion('Última vez', `${ult.carga} (${fecha(ult.fecha)})`) : ''}
+    ${ult ? seccion('Última vez', `${cargaConPeso(ult)} (${fecha(ult.fecha)})`) : ''}
     ${!it.comentario && !it.ejercicio_descripcion && !it.video_url && !ult ? '<p class="sub">Sin más información cargada para este ejercicio.</p>' : ''}
     ${alMarcar ? `<div class="pie"><button class="btn ${hecho ? 'btn-ghost' : 'btn-primario'}" data-marcar>
         ${hecho ? 'Editar registro' : '✓ Registrar'}</button></div>` : ''}`, { ancho: !!emb });
   $('[data-cerrar]', m).onclick = cerrarModal;
+  const marco = $('[data-marco]', m);
+  if (marco) montarVideo(marco, it.video_url);
   if (alMarcar) $('[data-marcar]', m).onclick = () => { cerrarModal(); alMarcar(it.id); };
+  if (cronometro) {
+    const valor = $('[data-crono]', m), obj = $('[data-objetivo]', m);
+    let inicio = Date.now();
+    const tic = () => {
+      // Se cerró la ficha (o se abrió otra): el cronómetro se apaga solo.
+      if (!document.contains(valor)) { clearInterval(reloj); return; }
+      const seg = Math.floor((Date.now() - inicio) / 1000);
+      valor.textContent = `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`;
+      obj?.classList.toggle('cumplido', seg >= objetivo);
+    };
+    const reloj = setInterval(tic, 250);
+    $('[data-reiniciar]', m).onclick = () => { inicio = Date.now(); tic(); };
+  }
 }
 
 /** Deslizar ejercicios ([data-item]) dentro de `cont`: derecha → `derecha(id)`, izquierda → `izquierda(id)`.
@@ -729,7 +788,7 @@ async function vistaEntrenar(diaId) {
     const previo = await api('GET', `/api/dias/${diaId}/entrenamiento`);
     reg = {}; esfuerzo = previo?.esfuerzo ?? null; nota = previo?.nota ?? '';
     if (previo) fechaSel = previo.fecha;
-    for (const i of previo?.items || []) if (i.item_id) reg[i.item_id] = { hecho: !!i.hecho, carga: i.carga || '', nota: i.nota || '' };
+    for (const i of previo?.items || []) if (i.item_id) reg[i.item_id] = { hecho: !!i.hecho, carga: i.carga || '', nota: i.nota || '', esfuerzo: i.esfuerzo ?? null, peso_kg: i.peso_kg ?? null };
     pintar();
   };
 
@@ -744,13 +803,14 @@ async function vistaEntrenar(diaId) {
       <div class="titulo-fila"><div><h2>${esc(dia.nombre)}</h2><div class="sub">${esc(rutina.titulo)}</div></div><div class="spacer"></div>
         <input type="date" id="fecha" value="${fechaSel}" max="${hoyISO()}" style="width:auto"></div>
       <div class="progreso-entreno"><span id="cuenta"></span><div class="barra"><div id="barra-progreso"></div></div></div>
-      <p class="sub ayuda-swipe">Deslizá a la <b>derecha</b> para registrarlo · a la <b>izquierda</b> para ver la ficha</p>
+      <p class="sub ayuda-swipe">${ES_PC
+        ? 'Tocá <b>▶ Comenzar</b> en cada ejercicio: se abre el video con un cronómetro, y al terminar, <b>✓ Registrar</b>'
+        : 'Deslizá a la <b>derecha</b> para comenzar (video y cronómetro). Si ya lo registraste, deslizalo de nuevo para corregirlo'}</p>
       <div id="ejercicios">${htmlDia(dia, { cargas, registro: reg })}</div>
       <div class="panel" id="cierre">
         <h3>¿Cómo te fue?</h3>
         <div class="sub" style="margin-bottom:8px">Esfuerzo percibido (1 = muy fácil, 10 = al límite)</div>
-        <div class="esfuerzo">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n =>
-          `<button type="button" data-esf="${n}" class="${esfuerzo === n ? 'on' : ''}">${n}</button>`).join('')}</div>
+        ${htmlEsfuerzo(esfuerzo)}
         <label class="campo" style="margin-top:12px">Comentario para tu profe (opcional)
           <textarea id="nota" placeholder="Molestias, dudas, qué te costó…">${esc(nota)}</textarea></label>
         <button class="btn btn-primario" id="terminar" style="width:100%;justify-content:center">Terminar entrenamiento</button>
@@ -769,7 +829,8 @@ async function vistaEntrenar(diaId) {
   };
   const enviar = id => {
     const r = reg[id] || {};
-    const body = { dia_id: diaId, fecha: fechaSel, item_id: id, hecho: !!r.hecho, carga: r.carga || null, nota: r.nota || null };
+    const body = { dia_id: diaId, fecha: fechaSel, item_id: id, hecho: !!r.hecho, carga: r.carga || null, nota: r.nota || null,
+                   esfuerzo: r.esfuerzo ?? null, peso_kg: r.peso_kg ?? null };
     estado(id, 'Guardando…');
     colas[id] = (colas[id] || Promise.resolve()).then(() => api('PUT', '/api/entrenamientos/item', body, { keepalive: true }))
       .then(() => estado(id, r.hecho || r.carga ? '✓ Guardado' : '', 'ok'))
@@ -794,51 +855,75 @@ async function vistaEntrenar(diaId) {
     el?.classList.toggle('hecho', r.hecho);
     const resumen = $(`[data-registro="${id}"]`);
     if (resumen) { resumen.hidden = !r.hecho; resumen.innerHTML = htmlRegistro(r); }
+    const acc = el?.querySelector('.acciones-pc');
+    if (acc) acc.innerHTML = r.hecho
+      ? `<button type="button" class="btn-ghost" data-editar="${id}">Editar registro</button>`
+      : `<button type="button" class="btn btn-verde" data-comenzar="${id}">▶ Comenzar</button>`;
     pintarProgreso();
     enviar(id);
     if (r.hecho) setTimeout(() => marcarSiguiente(id, true), 250);
     else marcarSiguiente();
   };
 
-  /** Ventanita de registro: propone lo de hoy (si ya lo anotó) o lo de la última vez, y un atajo
-   * verde con el aumento que fijó el profe (ver sugerirCarga), para progresar con un solo toque. */
+  /** Ventanita de registro: arranca con lo que indicó el profe (repeticiones/tiempo y peso), así
+   * si lo hizo tal cual solo toca Registrar; si no, lo cambia. Lo de la última vez es solo referencia.
+   * Si ya lo había anotado hoy, sale lo anotado para corregirlo. */
   const registrar = id => {
     const it = porId[id], r = reg[id] || {}, ult = cargas[id];
-    const mas = sugerirCarga(ult?.carga, rutina.aumento_pct);
+    const pesoInicial = r.hecho ? r.peso_kg : (r.peso_kg ?? it.peso_kg);
+    const conPeso = pesoInicial != null || it.peso_kg != null;
     const m = modal(`
       <div class="titulo-fila" style="margin-bottom:6px;flex-wrap:nowrap">
         <div class="nro-grande">${esc(it.ejercicio_numero ?? '·')}</div>
         <div style="flex:1;min-width:0"><h3 style="margin:0">${esc(nombreItem(it))}</h3>
-          ${it.prescripcion ? `<div class="sub">${esc(it.prescripcion)}</div>` : ''}</div>
+          ${prescConPeso(it) ? `<div class="sub">${esc(prescConPeso(it))}</div>` : ''}</div>
         <button type="button" class="btn-chico" data-cancelar>✕</button></div>
-      <p class="sub">${ult ? `La última vez (${fecha(ult.fecha)}): <b class="ultima-carga">${esc(ult.carga)}</b>` : 'Primera vez que anotás este ejercicio.'}</p>
+      <p class="sub">${ult ? `La última vez (${fecha(ult.fecha)}): <b class="ultima-carga">${esc(cargaConPeso(ult))}</b>` : 'Primera vez que anotás este ejercicio.'}</p>
       <form>
-        <div class="campo">Carga / reps de hoy
-          <div class="fila-carga">
-            <input type="text" name="carga" value="${esc(r.carga || ult?.carga || '')}" placeholder="ej. 8 kg, 3x12" autocomplete="off">
-            ${mas ? `<button type="button" class="btn btn-verde" data-mas>Hoy hice ${esc(mas)}</button>` : ''}
-          </div></div>
+        ${campo('¿Cuánto hiciste?', 'carga', { valor: r.hecho ? (r.carga || '') : (r.carga || it.prescripcion || ''),
+          extra: `placeholder="${it.modalidad === 'tiempo' ? 'ej. 3 × 20 seg' : 'ej. 3 × 10 con 8 kg'}" autocomplete="off"` })}
+        ${conPeso ? campo('Peso que usaste (kg)', 'peso_kg', { valor: pesoInicial != null ? String(pesoInicial).replace('.', ',') : '',
+          extra: 'inputmode="decimal" autocomplete="off" placeholder="ej. 12,5"' }) : ''}
+        <div class="campo">¿Cómo te sentiste? <span class="sub">(1 = muy fácil, 10 = al límite)</span>${htmlEsfuerzo(r.esfuerzo ?? null)}</div>
         ${campo('Nota (opcional)', 'nota', { valor: r.nota || '', extra: 'placeholder="Molestia, me costó la última serie…" autocomplete="off"' })}
         <div class="pie">
           ${r.hecho ? '<button type="button" class="btn-ghost" data-desmarcar style="margin-right:auto">Desmarcar</button>' : ''}
           <button type="button" class="btn-ghost" data-cancelar>Cancelar</button>
           <button class="btn btn-primario">✓ Registrar</button></div>
-      </form>`, { enfocar: false });  // sin foco: en el celular el teclado taparía el botón verde
+      </form>`, { enfocar: ES_PC });  // en el celular, sin foco: el teclado taparía el botón Registrar
     const f = $('form', m);
     const valor = n => f.elements[n].value.trim();
     $$('[data-cancelar]', m).forEach(b => { b.onclick = cerrarModal; });
-    f.onsubmit = e => { e.preventDefault(); cerrarModal(); guardar(id, { hecho: true, carga: valor('carga'), nota: valor('nota') }); };
-    if (mas) $('[data-mas]', m).onclick = () => { cerrarModal(); guardar(id, { hecho: true, carga: mas, nota: valor('nota') }); };
-    if (r.hecho) $('[data-desmarcar]', m).onclick = () => { cerrarModal(); guardar(id, { hecho: false, carga: '', nota: '' }); };
+    let esf = r.esfuerzo ?? null;
+    $('.esfuerzo', m).onclick = e => {
+      const b = e.target.closest('[data-esf]');
+      if (!b) return;
+      esf = esf === +b.dataset.esf ? null : +b.dataset.esf;
+      $$('[data-esf]', m).forEach(x => { x.classList.toggle('on', +x.dataset.esf === esf); x.setAttribute('aria-pressed', +x.dataset.esf === esf); });
+    };
+    const leerPeso = () => {
+      if (!f.elements.peso_kg) return null;
+      const n = parseFloat(valor('peso_kg').replace(',', '.').replace(/kg/i, ''));
+      return Number.isFinite(n) && n > 0 && n <= 1000 ? Math.round(n * 100) / 100 : null;
+    };
+    f.onsubmit = e => {
+      e.preventDefault();
+      if (f.elements.peso_kg && valor('peso_kg') && leerPeso() == null) { toast('El peso tiene que ser un número de kilos, por ejemplo 12,5', true); return; }
+      cerrarModal(); guardar(id, { hecho: true, carga: valor('carga'), nota: valor('nota'), esfuerzo: esf, peso_kg: leerPeso() });
+    };
+    if (r.hecho) $('[data-desmarcar]', m).onclick = () => { cerrarModal(); guardar(id, { hecho: false, carga: '', nota: '', esfuerzo: null, peso_kg: null }); };
   };
 
   const porId = itemsPorId([dia]);
-  const info = id => abrirInfo(porId[id], { cargas, hecho: !!reg[id]?.hecho, alMarcar: registrar });
-  habilitarSwipe(main(), { derecha: registrar, izquierda: info });
+  // Deslizar a la derecha hace lo mismo que «▶ Comenzar» en la PC; si ya estaba hecho, abre el registro para corregirlo.
+  const comenzar = id => abrirInfo(porId[id], { cargas, alMarcar: registrar, cronometro: true });
+  if (!ES_PC) habilitarSwipe(main(), { derecha: id => (reg[id]?.hecho ? registrar(id) : comenzar(id)) });
 
   main().onclick = e => {
-    const n = e.target.closest('[data-info]');
-    if (n) info(+n.dataset.info);
+    const c = e.target.closest('[data-comenzar]');
+    if (c) { comenzar(+c.dataset.comenzar); return; }
+    const ed = e.target.closest('[data-editar]');
+    if (ed) { registrar(+ed.dataset.editar); return; }
     const f = e.target.closest('[data-esf]');
     if (f) { esfuerzo = esfuerzo === +f.dataset.esf ? null : +f.dataset.esf; $$('[data-esf]').forEach(b => b.classList.toggle('on', +b.dataset.esf === esfuerzo)); }
     if (e.target.id === 'terminar') terminar(e.target);
@@ -1266,10 +1351,32 @@ async function catalogo() {
   return S.catalogo;
 }
 
+/** Cómo se prescribe un ejercicio (espejo de app/services/prescripcion.py):
+ * «reps» = series × repeticiones (o rango reps–reps_max), «tiempo» = series × segundos,
+ * «libre» = texto tal cual (al fallo, 12-10-8…). por_lado = la cantidad es por cada lado. */
+const MODALIDADES = [['reps', 'Series × repeticiones'], ['tiempo', 'Series × tiempo'], ['libre', 'Texto libre']];
+const CAMPOS_PRESC = ['modalidad', 'series', 'reps', 'reps_max', 'segundos', 'por_lado', 'peso_kg'];
+function duracionTexto(seg) {
+  const m = Math.floor(seg / 60), s = seg % 60;
+  return !m ? `${s} seg` : s ? `${m} min ${s} seg` : `${m} min`;
+}
+function textoPrescripcion(it) {
+  const series = it.series || 1;
+  let t;
+  if (it.modalidad === 'reps' && it.reps) {
+    const reps = it.reps_max ? `${it.reps}–${it.reps_max}` : `${it.reps}`;
+    t = series > 1 ? `${series} × ${reps} reps` : `${reps} reps`;
+  } else if (it.modalidad === 'tiempo' && it.segundos) {
+    t = series > 1 ? `${series} × ${duracionTexto(it.segundos)}` : duracionTexto(it.segundos);
+  } else return it.modalidad === 'libre' ? (it.prescripcion || '') : '';
+  return t + (it.por_lado ? ' c/lado' : '');
+}
+
 /** La API guarda superserie como número de grupo; el editor la maneja como "unido al anterior". */
 function aEditor(r) {
   for (const d of r.dias) for (const b of d.bloques) b.items.forEach((it, i) => {
     it._unido = i > 0 && it.superserie != null && b.items[i - 1].superserie === it.superserie;
+    it.modalidad = it.modalidad || 'libre';
   });
   return r;
 }
@@ -1279,7 +1386,8 @@ function aApi(dias) {
     id: d.id, nombre: d.nombre, color: d.color,
     bloques: d.bloques.map(b => {
       const items = b.items.map(it => ({ id: it.id, ejercicio_id: it.ejercicio_id || null, nombre_libre: it.ejercicio_id ? null : it.nombre_libre,
-        prescripcion: it.prescripcion, comentario: it.comentario, superserie: null }));
+        prescripcion: it.modalidad === 'libre' ? it.prescripcion : null, comentario: it.comentario, superserie: null,
+        ...Object.fromEntries(CAMPOS_PRESC.map(c => [c, it[c] ?? null])) }));
       b.items.forEach((it, i) => {
         if (it._unido && i > 0) {
           if (items[i - 1].superserie == null) items[i - 1].superserie = ++grupo;
@@ -1301,11 +1409,45 @@ async function vistaEditor(id) {
   const plantilla = R.alumno_id == null;
   const marcarSucio = () => { S.sucio = true; $('#estado-guardado').textContent = 'Cambios sin guardar'; };
 
+  const vistaAlumno = it => [it.modalidad !== 'libre' ? textoPrescripcion(it) : it.prescripcion,
+    it.peso_kg ? `con ${kg(it.peso_kg)}` : null].filter(Boolean).join(' · ');
+
+  /** Prescripción del ítem: primero la modalidad, y según ella los números que pide. */
+  const htmlPrescEd = (it, p) => {
+    const num = (campo, ph, etiqueta, ancho = '') => `<input type="number" inputmode="numeric" min="1" step="1" class="num ${ancho}"
+      data-n="${p}.${campo}" value="${it[campo] ?? ''}" placeholder="${ph}" aria-label="${etiqueta}" title="${etiqueta}">`;
+    const lado = `<label class="lado" title="La cantidad es por cada lado (ejercicio unilateral)">
+      <input type="checkbox" data-c="${p}.por_lado" ${it.por_lado ? 'checked' : ''}> c/lado</label>`;
+    let campos;
+    if (it.modalidad === 'reps') {
+      campos = `${num('series', '3', 'Series')}<span class="x">×</span>${num('reps', '10', 'Repeticiones')}
+        <span class="x" title="Rango opcional">a</span>${num('reps_max', '—', 'Repeticiones hasta (opcional, para un rango como 8 a 12)')}
+        <span class="u">reps</span>${lado}`;
+    } else if (it.modalidad === 'tiempo') {
+      campos = `${num('series', '3', 'Series')}<span class="x">×</span>${num('segundos', '30', 'Segundos por serie', 'ancho')}
+        <span class="u">seg</span>${lado}`;
+    } else {
+      campos = `<input type="text" data-f="${p}.prescripcion" value="${esc(it.prescripcion || '')}"
+        placeholder="Al fallo, 12-10-8, AMRAP…" aria-label="Prescripción en texto libre">`;
+    }
+    const vista = vistaAlumno(it);
+    const peso = `<label class="peso" title="Peso indicado (opcional). El alumno lo ve y lo puede cambiar al registrar.">Peso
+      <input type="text" inputmode="decimal" class="num ancho" data-kg="${p}.peso_kg" value="${it.peso_kg != null ? String(it.peso_kg).replace('.', ',') : ''}"
+        placeholder="—" aria-label="Peso indicado en kilos (opcional)"> kg</label>`;
+    return `<div class="presc-ed" data-presc="${p}">
+      <select data-m="${p}" aria-label="Cómo se prescribe">${MODALIDADES.map(([v, t]) =>
+        `<option value="${v}" ${it.modalidad === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      <div class="presc-campos">${campos}</div>
+      <div class="presc-campos">${peso}</div>
+      <div class="presc-vista sub" data-vista="${p}" aria-live="polite">${vista ? `El alumno ve: <b>${esc(vista)}</b>` : ''}</div>
+    </div>`;
+  };
+
   const htmlItemEd = (it, d, b, i) => `<div class="ed-item ${it._unido ? 'unido' : ''}">
     <span class="idx">${i + 1}</span>
     <div class="picker"><input type="text" class="sel" data-picker="${d}.${b}.${i}" value="${esc(etiquetaEjercicio(it))}"
       placeholder="N° o nombre del ejercicio" autocomplete="off"></div>
-    <input type="text" data-f="${d}.${b}.${i}.prescripcion" value="${esc(it.prescripcion || '')}" placeholder="3x10">
+    ${htmlPrescEd(it, `${d}.${b}.${i}`)}
     <input type="text" data-f="${d}.${b}.${i}.comentario" value="${esc(it.comentario || '')}" placeholder="Comentario / técnica">
     <div class="acciones">
       ${i > 0 ? `<button class="btn-chico btn-sombra ${it._unido ? 'on' : ''}" data-a="unir" data-p="${d}.${b}.${i}" title="Superserie con el anterior">⛓</button>` : '<span style="width:30px"></span>'}
@@ -1354,9 +1496,7 @@ async function vistaEditor(id) {
       <div class="sub">${plantilla ? 'Sin alumno: se asigna copiándola' : `Para ${esc(R.alumno_nombre)}`} · <span id="estado-guardado">Guardado</span></div></div></div>
     <div class="panel">
       <div class="grid2">${campo('Título', 'titulo', { valor: R.titulo, extra: 'data-r="titulo"' })}
-        ${plantilla ? '' : campo('Desde', 'fecha_inicio', { tipo: 'date', valor: R.fecha_inicio || '', extra: 'data-r="fecha_inicio"' })}
-        ${campo('Aumento sugerido de carga (%)', 'aumento_pct', { tipo: 'number', valor: R.aumento_pct ?? '',
-          extra: 'data-r="aumento_pct" id="aumento-pct" min="0" max="100" step="0.5" placeholder="Vacío = 1 kg más · 0 = no sugerir"' })}</div>
+        ${plantilla ? '' : campo('Desde', 'fecha_inicio', { tipo: 'date', valor: R.fecha_inicio || '', extra: 'data-r="fecha_inicio"' })}</div>
       ${campo('Indicaciones generales para el alumno (descanso, hidratación, objetivo del mes…)', 'notas', { tipo: 'textarea', valor: R.notas || '', extra: 'data-r="notas" rows="5"' })}
     </div>
     <div id="ed-dias"></div>
@@ -1371,9 +1511,40 @@ async function vistaEditor(id) {
   const nuevoBloque = nombre => ({ nombre, detalle: null, prescripcion: null, comentario: null, items: [] });
   const sinIds = o => JSON.parse(JSON.stringify(o, (k, v) => (k === 'id' ? undefined : v)));
 
+  const itemDe = p => { const [d, b, i] = ruta(p); return R.dias[d].bloques[b].items[i]; };
+  const refrescarVista = p => {
+    const it = itemDe(p), v = $(`[data-vista="${p}"]`), txt = vistaAlumno(it);
+    if (v) v.innerHTML = txt ? `El alumno ve: <b>${esc(txt)}</b>` : '';
+  };
+
   main().oninput = e => {
     const t = e.target;
     if (t.dataset.r) { R[t.dataset.r] = t.value; marcarSucio(); return; }
+    if (t.dataset.m) {  // cambio de modalidad: se redibuja para mostrar los campos que corresponden
+      const it = itemDe(t.dataset.m);
+      // Al pasar a texto libre se arranca con lo que ya estaba cargado («3 × 10 reps»), para retocarlo.
+      if (t.value === 'libre' && !it.prescripcion) it.prescripcion = textoPrescripcion(it);
+      it.modalidad = t.value;
+      pintarDias(); marcarSucio();
+      $(`[data-m="${t.dataset.m}"]`)?.focus();
+      return;
+    }
+    if (t.dataset.n) {
+      const partes = t.dataset.n.split('.'), campoN = partes.pop(), it = itemDe(partes.join('.'));
+      it[campoN] = t.value === '' ? null : Math.max(1, Math.round(+t.value));
+      refrescarVista(partes.join('.')); marcarSucio(); return;
+    }
+    if (t.dataset.kg) {  // peso: admite coma decimal; lo que no es un número queda vacío
+      const partes = t.dataset.kg.split('.'), campoK = partes.pop(), it = itemDe(partes.join('.'));
+      const n = parseFloat(t.value.replace(',', '.'));
+      it[campoK] = Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+      refrescarVista(partes.join('.')); marcarSucio(); return;
+    }
+    if (t.dataset.c) {
+      const partes = t.dataset.c.split('.'), campoC = partes.pop(), it = itemDe(partes.join('.'));
+      it[campoC] = t.checked ? 1 : 0;
+      refrescarVista(partes.join('.')); marcarSucio(); return;
+    }
     if (t.dataset.f) {
       const partes = t.dataset.f.split('.'), campoF = partes.pop(), [d, b, i] = partes.map(Number);
       const obj = i != null ? R.dias[d].bloques[b].items[i] : b != null ? R.dias[d].bloques[b] : R.dias[d];
@@ -1407,7 +1578,8 @@ async function vistaEditor(id) {
       case 'bloque-subir': mover(dias[d].bloques, b, -1); break;
       case 'bloque-bajar': mover(dias[d].bloques, b, 1); break;
       case 'item-agregar': {
-        dias[d].bloques[b].items.push({ ejercicio_id: null, nombre_libre: null, prescripcion: '', comentario: '', _unido: false });
+        dias[d].bloques[b].items.push({ ejercicio_id: null, nombre_libre: null, prescripcion: '', comentario: '', _unido: false,
+          modalidad: 'reps', series: null, reps: null, reps_max: null, segundos: null, por_lado: 0, peso_kg: null });
         pintarDias(); marcarSucio();
         $(`[data-picker="${d}.${b}.${dias[d].bloques[b].items.length - 1}"]`)?.focus();
         return;
@@ -1433,7 +1605,7 @@ async function vistaEditor(id) {
     else { Object.assign(it, { ejercicio_id: op.id, nombre_libre: null, ejercicio_numero: op.numero, ejercicio_nombre: op.nombre, video_url: op.video_url }); }
     input.value = etiquetaEjercicio(it);
     cerrarLista(); marcarSucio();
-    input.closest('.ed-item').querySelector('[data-f$=".prescripcion"]')?.focus();
+    input.closest('.ed-item').querySelector('.presc-ed select')?.focus();
   };
   const pintarLista = input => {
     const q = input.value.trim(), nq = normalizar(q);
@@ -1477,8 +1649,7 @@ async function vistaEditor(id) {
     const btns = $$('#guardar, #publicar');
     btns.forEach(x => { x.disabled = true; });
     try {
-      const r = await api('PUT', `/api/rutinas/${id}`, { titulo: R.titulo, notas: R.notas, fecha_inicio: R.fecha_inicio || null,
-        aumento_pct: R.aumento_pct === '' || R.aumento_pct == null ? null : Number(R.aumento_pct), dias: aApi(R.dias) });
+      const r = await api('PUT', `/api/rutinas/${id}`, { titulo: R.titulo, notas: R.notas, fecha_inicio: R.fecha_inicio || null, dias: aApi(R.dias) });
       R = aEditor(r);  // ids nuevos de lo recién insertado
       S.sucio = false;
       if (publicar) {
@@ -1532,12 +1703,17 @@ const TOURS = {
   'entrenar': [
     { sel: '.progreso-entreno', titulo: 'Tu progreso de hoy',
       texto: 'Cuántos ejercicios llevás. Todo se guarda <b>al instante</b>: si se corta la señal o cerrás la app, no perdés nada.' },
-    { buscar: () => primerVisible('#ejercicios .item'), titulo: 'Deslizá a la derecha → registrar',
-      texto: 'Apenas terminás un ejercicio, <b>deslizalo a la derecha</b>. Se abre una ventanita con lo que hiciste la última vez ya cargado: si fue igual, tocá <b>✓ Registrar</b> y listo. La pantalla baja sola al siguiente, que queda marcado en celeste.' },
-    { buscar: () => primerVisible('#ejercicios .item'), titulo: '← Deslizá a la izquierda → ficha',
-      texto: 'Si tenés una duda en medio del entrenamiento, <b>deslizalo a la izquierda</b> (o tocá su nombre): ves el video, la indicación de tu profe y con cuánto lo hiciste la vez anterior.' },
-    { buscar: () => primerVisible('#ejercicios .item'), titulo: '¿Subiste de peso?',
-      texto: 'En la ventanita de registro hay un <b>botón verde</b> con lo que tu profe te sugiere subir respecto de la última vez («Hoy hice 9 kg»): un toque y queda anotado. Si hiciste otra cosa, escribila en el casillero. Lo que anotes queda en la tarjeta; si te equivocaste, deslizalo otra vez para corregirlo o desmarcarlo.' },
+    ...(ES_PC ? [
+    { buscar: () => primerVisible('[data-comenzar]'), titulo: '▶ Comenzar',
+      texto: 'Cuando vas a hacer un ejercicio, tocá <b>Comenzar</b>: se abre la ficha, el video arranca solo y arriba corre un <b>cronómetro</b> para que veas cuánto tiempo pasa (en los ejercicios de tiempo también te muestra el objetivo). Al terminar, tocá <b>✓ Registrar</b>.' },
+    { buscar: () => primerVisible('#ejercicios .item'), titulo: 'Anotá cuánto hiciste',
+      texto: 'La ventanita de registro ya trae lo que indicó tu profe (repeticiones o tiempo, y el peso): si lo hiciste así, solo marcá <b>cómo te sentiste</b> del 1 al 10 y tocá Registrar; si no, cambialo. Ahí también ves lo de la última vez, para comparar. Si te equivocaste, tocá <b>Editar registro</b>.' },
+    ] : [
+    { buscar: () => primerVisible('#ejercicios .item'), titulo: 'Deslizá a la derecha → comenzar',
+      texto: 'Cuando vas a hacer un ejercicio, <b>deslizalo a la derecha</b>: se abre la ficha, el video arranca solo y arriba corre un <b>cronómetro</b>. Al terminar, tocá <b>✓ Registrar</b> y anotá cuánto hiciste y <b>cómo te sentiste</b> del 1 al 10. La pantalla baja sola al siguiente, que queda marcado en celeste.' },
+    { buscar: () => primerVisible('#ejercicios .item'), titulo: 'Corregir',
+      texto: 'Lo que anotes queda en la tarjeta. Si te equivocaste, deslizalo otra vez a la derecha: se abre el registro para corregirlo o desmarcarlo.' },
+    ]),
     { sel: '#fecha', titulo: 'La fecha',
       texto: 'Si lo estás anotando después (por ejemplo, entrenaste ayer), cambiá la fecha acá.' },
     { sel: '#cierre', titulo: 'Al terminar',
@@ -1584,16 +1760,14 @@ const TOURS = {
   'editor': [
     { sel: '#main .panel', titulo: 'Datos generales',
       texto: 'Título, desde cuándo rige, y las <b>indicaciones generales</b> que el alumno lee arriba de todo: descansos, hidratación, el objetivo del mes.' },
-    { sel: '#aumento-pct', titulo: 'Cuánto subir la carga',
-      texto: 'Cuando el alumno registra un ejercicio, la app le ofrece un botón verde «Hoy hice …» con la carga de la última vez <b>más este porcentaje</b> (redondeado a medio kilo). Vacío = 1 kg más; 0 = sin sugerencia.' },
     { buscar: () => primerVisible('.ed-dia > .cab'), titulo: 'Cada día',
       texto: 'Nombre y color del día. Con las flechas lo reordenás, y <b>Duplicar día</b> te ahorra cargar dos veces un día parecido.' },
     { buscar: () => primerVisible('.ed-bloque .cab'), titulo: 'Bloques',
       texto: 'Entrada en calor, Trabajo del día, Elongación… El segundo campo es el detalle (“Full body”). Si el bloque no lleva ejercicios (una elongación de 10´), usá los campos de <b>tiempo</b> e <b>indicación</b> de abajo.' },
     { buscar: () => primerVisible('[data-picker]'), titulo: 'Elegir el ejercicio',
       texto: 'Escribí el <b>número</b> del catálogo, como en la planilla, o parte del nombre, y Enter. Si no está en el catálogo, podés usarlo como texto libre.' },
-    { buscar: () => primerVisible('.ed-item [data-f$=".prescripcion"]'), titulo: 'Series y repeticiones',
-      texto: 'Como en la planilla: <b>3x10</b>, <b>3x15´´</b> (segundos), <b>2x10 c/lado</b>. Al lado va el comentario o la técnica.' },
+    { buscar: () => primerVisible('.ed-item .presc-ed'), titulo: 'Series, repeticiones o tiempo',
+      texto: 'Opcional: un <b>peso indicado</b> en kg, que el alumno ve y puede cambiar al registrar. Primero elegí cómo se hace: <b>Series × repeticiones</b> (3 × 10, o un rango 3 × 8 a 12), <b>Series × tiempo</b> (3 × 15 seg, para planchas e isométricos) o <b>Texto libre</b> (al fallo, 12-10-8…). Marcá <b>c/lado</b> si es unilateral. Abajo ves cómo le va a quedar al alumno.' },
     { buscar: () => primerVisible('[data-a="unir"]'), titulo: 'Superseries ⛓',
       texto: 'Une el ejercicio con el de arriba: el alumno los ve en un recuadro y los hace seguidos sin descanso.' },
     { sel: '#guardar', titulo: 'Guardar',

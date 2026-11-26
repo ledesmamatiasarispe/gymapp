@@ -15,7 +15,7 @@ from ..services import rutinas as svc
 router = APIRouter(prefix="/api", tags=["rutinas"])
 
 # Cuánto sugerirle al alumno que suba la carga respecto de la última vez (el botón
-# verde de "Hoy hice …"). NULL = el criterio por defecto, 1 kg; 0 = no sugerir.
+# verde de "Hoy hice …"). NULL o 0 = no sugerir.
 AumentoPct = Field(None, ge=0, le=100)
 
 _RESUMEN = """SELECT r.id, r.alumno_id, r.profesor_id, r.titulo, r.fecha_inicio, r.estado,

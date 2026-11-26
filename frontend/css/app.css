@@ -224,9 +224,8 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .item.swipe-der::before, .item.swipe-izq::after {
   position: absolute; top: 50%; transform: translateY(-50%); font-weight: 700; white-space: nowrap; opacity: .45; transition: opacity .1s;
 }
-.item.swipe-der::before { content: "Registrar ✓"; right: calc(100% + 14px); color: var(--green); }
+.item.swipe-der::before { content: "▶ Comenzar"; right: calc(100% + 14px); color: var(--green); }
 .item.hecho.swipe-der::before { content: "Editar"; }
-.item.swipe-izq::after { content: "Ficha ›"; left: calc(100% + 14px); color: var(--accent); }
 .item.swipe-listo::before, .item.swipe-listo::after { opacity: 1; }
 .item.swipe-der.swipe-listo { border-color: var(--green); }
 .item.swipe-izq.swipe-listo { border-color: var(--accent); }
@@ -250,8 +249,6 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 .item .registro[hidden] { display: none; }
 .registro-texto { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.fila-carga { display: flex; gap: 8px; margin-top: 4px; }
-.fila-carga input { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; }
 .btn-verde { background: var(--green); color: #000; font-weight: 700; white-space: nowrap; border-color: var(--green); }
 .btn-verde:hover { background: var(--green); filter: brightness(1.1); }
 .ultima-carga { color: var(--text); }
@@ -293,11 +290,22 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ed-bloque { border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: var(--bg); }
 .ed-bloque .cab { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
 .ed-bloque .extra { display: grid; grid-template-columns: 140px 1fr; gap: 8px; margin-bottom: 8px; }
-.ed-item { display: grid; grid-template-columns: 26px minmax(200px, 2fr) 130px minmax(140px, 2fr) auto; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--surface2); }
+.ed-item { display: grid; grid-template-columns: 26px minmax(200px, 2fr) minmax(260px, auto) minmax(140px, 2fr) auto; gap: 6px; align-items: center; padding: 6px 0; border-top: 1px solid var(--surface2); }
 .ed-item.unido { border-left: 3px solid var(--purple); padding-left: 6px; margin-left: -9px; }
 .ed-item .idx { color: var(--muted); font-size: 12px; text-align: center; }
 .ed-item .acciones { display: flex; gap: 3px; }
 .ed-item input { padding: 7px 9px; font-size: 14px; }
+.presc-ed { display: flex; flex-direction: column; gap: 4px; }
+.presc-ed select { padding: 6px 8px; font-size: 13px; }
+.presc-campos { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.presc-campos input.num { width: 52px; padding: 7px 4px; text-align: center; }
+.presc-campos input.num.ancho { width: 64px; }
+.presc-campos .x, .presc-campos .u { color: var(--muted); font-size: 13px; }
+.presc-campos .lado { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; margin-left: 4px; cursor: pointer; }
+.presc-campos .lado input { width: auto; padding: 0; }
+.presc-campos > input[type="text"] { flex: 1; min-width: 160px; }
+.presc-vista { font-size: 12px; min-height: 1em; }
+.presc-campos .peso { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); }
 @media (max-width: 760px) {
   .ed-bloque .cab, .ed-bloque .extra { grid-template-columns: 1fr; }
   .ed-item { grid-template-columns: 22px 1fr; }
@@ -366,15 +374,31 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 }
 #modal {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 480px;
-  max-height: 92vh; overflow-y: auto; padding: 20px;
+  max-height: 92vh; max-height: 92dvh; overflow-y: auto; padding: 20px;
 }
 #modal.ancho { max-width: 860px; padding: 12px; }
 #modal h3 { margin-bottom: 14px; }
 #modal .pie { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
 .video-marco { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; }
 .video-marco iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+/* En el celular el visor de Drive se dibuja más grande que el recuadro: se lo hace el doble y se lo achica a la mitad. */
+.video-marco iframe.escalado { width: 200%; height: 200%; transform: scale(.5); transform-origin: 0 0; }
+.video-marco video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
 .clave-temporal { font-family: ui-monospace, Consolas, monospace; font-size: 22px; letter-spacing: .1em; background: var(--bg); padding: 12px; border-radius: 8px; text-align: center; margin: 10px 0; user-select: all; }
 #toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
 @media (max-width: 760px) { #toasts { bottom: calc(76px + env(safe-area-inset-bottom)); } }
 .toast { background: var(--surface2); border: 1px solid var(--border); border-left: 4px solid var(--green); padding: 10px 16px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); max-width: 90vw; }
 .toast.error { border-left-color: var(--red); }
+
+/* Entrenar en la PC: botón por ejercicio y cronómetro arriba de la ficha */
+.item .acciones-pc { grid-column: 2 / 4; display: flex; justify-content: flex-end; margin-top: 4px; }
+.cronometro {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--bg); border: 1px solid var(--green); border-radius: 10px; padding: 8px 14px; margin-bottom: 12px;
+}
+.crono-etiqueta { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.crono-valor { font-size: 32px; font-weight: 800; color: var(--green); font-variant-numeric: tabular-nums; min-width: 4ch; }
+.crono-objetivo { color: var(--muted); font-size: 14px; flex: 1; }
+.crono-objetivo.cumplido { color: var(--green); font-weight: 700; }
+.crono-objetivo.cumplido::after { content: ' ✓'; }
+.cronometro .btn-chico { margin-left: auto; }

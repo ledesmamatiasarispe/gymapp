@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS rutina_bloques (
 
 -- superserie: ítems consecutivos del mismo bloque con el mismo número se hacen
 -- seguidos y cuentan como una serie. NULL = ejercicio suelto.
+-- Prescripción (ver services/prescripcion.py): modalidad «reps» = series × reps
+-- (o rango reps..reps_max), «tiempo» = series × segundos, «libre» = solo el texto.
+-- por_lado: el ejercicio es unilateral y la cantidad es por cada lado.
+-- prescripcion guarda el texto que lee el alumno, armado a partir de los campos.
 CREATE TABLE IF NOT EXISTS rutina_items (
     id           INTEGER PRIMARY KEY,
     bloque_id    INTEGER NOT NULL REFERENCES rutina_bloques(id) ON DELETE CASCADE,
@@ -119,7 +123,15 @@ CREATE TABLE IF NOT EXISTS rutina_items (
     nombre_libre TEXT,
     prescripcion TEXT,
     comentario   TEXT,
-    superserie   INTEGER
+    superserie   INTEGER,
+    modalidad    TEXT CHECK (modalidad IN ('reps', 'tiempo', 'libre')),
+    series       INTEGER CHECK (series > 0),
+    reps         INTEGER CHECK (reps > 0),
+    reps_max     INTEGER CHECK (reps_max > reps),
+    segundos     INTEGER CHECK (segundos > 0),
+    por_lado     INTEGER NOT NULL DEFAULT 0,
+    -- peso indicado por el profe (kg), opcional; el alumno lo puede cambiar al registrar
+    peso_kg      REAL CHECK (peso_kg > 0)
 );
 
 {entrenamientos}
@@ -132,6 +144,10 @@ CREATE TABLE IF NOT EXISTS entrenamiento_items (
     hecho            INTEGER NOT NULL DEFAULT 0,
     carga            TEXT,
     nota             TEXT,
+    -- cómo se sintió al terminar ese ejercicio, 1 a 10 (como el esfuerzo de la sesión)
+    esfuerzo         INTEGER CHECK (esfuerzo BETWEEN 1 AND 10),
+    -- peso con el que lo hizo (kg); arranca con el indicado por el profe
+    peso_kg          REAL CHECK (peso_kg > 0),
     UNIQUE (entrenamiento_id, item_id)
 );
 
@@ -190,6 +206,15 @@ _COLUMNAS_NUEVAS = (
     ("rutinas", "aumento_pct", "REAL CHECK (aumento_pct BETWEEN 0 AND 100)"),
     ("ejercicios", "miniatura", "TEXT"),
     ("usuarios", "tutoriales_vistos", "TEXT"),
+    ("rutina_items", "modalidad", "TEXT CHECK (modalidad IN ('reps', 'tiempo', 'libre'))"),
+    ("rutina_items", "series", "INTEGER CHECK (series > 0)"),
+    ("rutina_items", "reps", "INTEGER CHECK (reps > 0)"),
+    ("rutina_items", "reps_max", "INTEGER CHECK (reps_max > reps)"),
+    ("rutina_items", "segundos", "INTEGER CHECK (segundos > 0)"),
+    ("rutina_items", "por_lado", "INTEGER NOT NULL DEFAULT 0"),
+    ("entrenamiento_items", "esfuerzo", "INTEGER CHECK (esfuerzo BETWEEN 1 AND 10)"),
+    ("rutina_items", "peso_kg", "REAL CHECK (peso_kg > 0)"),
+    ("entrenamiento_items", "peso_kg", "REAL CHECK (peso_kg > 0)"),
 )
 
 
@@ -198,6 +223,21 @@ def _agregar_columnas_nuevas(conn: sqlite3.Connection) -> None:
     for tabla, columna, definicion in _COLUMNAS_NUEVAS:
         if columna not in {r[1] for r in conn.execute(f"PRAGMA table_info({tabla})")}:
             conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}")
+
+
+def _estructurar_prescripciones(conn: sqlite3.Connection) -> None:
+    """Ítems guardados cuando la prescripción era solo texto («3x10´´»): se pasan a
+    modalidad/series/reps/segundos. Corre una sola vez por ítem (los que tienen modalidad
+    NULL); lo que no se entiende queda como «libre» con el texto original."""
+    from .services.prescripcion import normalizar_item
+    filas = conn.execute("SELECT id, prescripcion FROM rutina_items WHERE modalidad IS NULL").fetchall()
+    for fila in filas:
+        c = normalizar_item({"prescripcion": fila["prescripcion"]})
+        conn.execute(
+            """UPDATE rutina_items SET modalidad = ?, series = ?, reps = ?, reps_max = ?, segundos = ?,
+                      por_lado = ?, prescripcion = ? WHERE id = ?""",
+            (c["modalidad"] or "libre", c["series"], c["reps"], c["reps_max"], c["segundos"], c["por_lado"],
+             c["prescripcion"], fila["id"]))
 
 
 def ahora() -> str:
@@ -219,6 +259,7 @@ def init_db() -> None:
         conn.executescript(SCHEMA.replace("{entrenamientos}", DDL_ENTRENAMIENTOS.format(nombre="entrenamientos") + ";"))
         _migrar_entrenamientos_a_sesiones(conn)
         _agregar_columnas_nuevas(conn)
+        _estructurar_prescripciones(conn)
         conn.executescript(INDICES)
         conn.commit()
     finally:

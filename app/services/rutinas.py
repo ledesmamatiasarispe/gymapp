@@ -11,10 +11,14 @@ import sqlite3
 from fastapi import HTTPException
 
 from ..db import ahora
+from . import prescripcion
 
 _CAMPOS_DIA = ("nombre", "color")
 _CAMPOS_BLOQUE = ("nombre", "detalle", "prescripcion", "comentario")
-_CAMPOS_ITEM = ("ejercicio_id", "nombre_libre", "prescripcion", "comentario", "superserie")
+_CAMPOS_PRESC = ("modalidad", "series", "reps", "reps_max", "segundos", "por_lado")
+_CAMPOS_ITEM = ("ejercicio_id", "nombre_libre", "prescripcion", "comentario", "superserie", *_CAMPOS_PRESC, "peso_kg")
+# Se guardan tal cual (números/None); el resto de los campos son texto y se recortan.
+_CAMPOS_CRUDOS = {"ejercicio_id", "superserie", *_CAMPOS_PRESC, "peso_kg"}
 
 
 def _texto(v) -> str | None:
@@ -77,7 +81,7 @@ def _sincronizar(conn, tabla, padre_col, padre_id, filas, campos, hijos=None):
         valores = []
         for c in campos:
             v = fila.get(c)
-            valores.append(v if c in ("ejercicio_id", "superserie") else _texto(v))
+            valores.append(v if c in _CAMPOS_CRUDOS else _texto(v))
         if tabla != "rutina_items" and not valores[0]:
             raise HTTPException(422, "Cada día y cada bloque necesita un nombre")
         fid = fila.get("id")
@@ -99,9 +103,41 @@ def _sincronizar(conn, tabla, padre_col, padre_id, filas, campos, hijos=None):
     return resultado
 
 
+def _peso(v) -> float | None:
+    """Peso indicado en kg: acepta 12, 12.5 o "12,5"; vacío = sin peso."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        n = float(str(v).replace(",", ".").replace("kg", "").strip())
+    except ValueError:
+        raise ValueError("el peso tiene que ser un número de kilos")
+    if not 0 < n <= 1000:
+        raise ValueError("el peso tiene que estar entre 0 y 1000 kg")
+    return round(n, 2)
+
+
+def _normalizar_prescripciones(dias: list[dict]) -> list[dict]:
+    """Cada ítem con sus campos de prescripción coherentes (ver services/prescripcion.py)."""
+    salida = []
+    for d in dias:
+        bloques = []
+        for b in d.get("bloques", []):
+            items = []
+            for i in b.get("items", []):
+                try:
+                    items.append({**i, **prescripcion.normalizar_item(i), "peso_kg": _peso(i.get("peso_kg"))})
+                except ValueError as e:
+                    nombre = i.get("nombre_libre") or f"ejercicio {i.get('ejercicio_id')}"
+                    raise HTTPException(422, f"{d.get('nombre')} / {b.get('nombre')} / {nombre}: {e}")
+            bloques.append({**b, "items": items})
+        salida.append({**d, "bloques": bloques})
+    return salida
+
+
 def guardar_contenido(conn: sqlite3.Connection, rutina_id: int, dias: list[dict]) -> None:
     """Reemplaza el contenido de la rutina por `dias`. Debe correr dentro de una transacción."""
     _validar_ejercicios(conn, dias)
+    dias = _normalizar_prescripciones(dias)
     for dia, dia_id in _sincronizar(conn, "rutina_dias", "rutina_id", rutina_id, dias, _CAMPOS_DIA):
         bloques = dia.get("bloques", [])
         for bloque, bloque_id in _sincronizar(conn, "rutina_bloques", "dia_id", dia_id, bloques, _CAMPOS_BLOQUE):

@@ -29,7 +29,11 @@ def test_estructura_de_la_rutina():
     assert [b["nombre"] for b in dia1["bloques"]] == ["Entrada en calor", "Trabajo del día", "Elongación"]
     assert [i["numero"] for i in dia1["bloques"][0]["items"]] == [2, 4, 8]
     assert dia1["bloques"][1]["detalle"] == "Full body"
-    assert dia1["bloques"][1]["items"][3]["prescripcion"] == "2x10 c/lado"
+    unilateral = dia1["bloques"][1]["items"][3]
+    assert unilateral["prescripcion"] == "2x10 c/lado"
+    assert (unilateral["modalidad"], unilateral["series"], unilateral["reps"], unilateral["por_lado"]) == ("reps", 2, 10, 1)
+    plancha = dia1["bloques"][0]["items"][0]  # «3x10´´(son 3 series de 10 segundos cada una)»
+    assert (plancha["modalidad"], plancha["series"], plancha["segundos"]) == ("tiempo", 3, 10)
     elongacion = dia1["bloques"][2]
     assert elongacion["items"] == [] and elongacion["prescripcion"] == "10´"
     assert elongacion["comentario"].startswith("Primero nos alimentamos")

@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 
+from . import prescripcion
+
 _DIA = re.compile(r"^\s*d[ií]a\s*\d+", re.IGNORECASE)
 _ENCABEZADOS = {"ejercicios", "series/repeticiones/tiempo", "comentarios"}
 _SIN_RELLENO = {None, "00000000", "FFFFFFFF"}
@@ -157,6 +159,7 @@ def parsear_rutina(ws: Worksheet, nombres: dict[int, str]) -> tuple[dict, list[s
             "numero": numero if numero in nombres else None,
             "nombre_libre": nombre_libre,
             "prescripcion": vc,
+            **prescripcion.parsear(vc),
             "comentario": vd,
             "superserie": ss_actual if sombreado else None,
         })

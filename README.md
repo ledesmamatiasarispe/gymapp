@@ -32,13 +32,21 @@ Ejercicio (catálogo: número, nombre, grupo, video)
 Rutina (alumno o plantilla; borrador → publicada → archivada)
   └ Día (nombre, color)
      └ Bloque (Entrada en calor / Trabajo del día / Elongación; detalle, tiempo, indicación)
-        └ Ítem (ejercicio o texto libre, series/reps, comentario, superserie)
+        └ Ítem (ejercicio o texto libre, prescripción, comentario, superserie)
 Entrenamiento (alumno + día + fecha, esfuerzo 1-10, nota)
   └ ítems hechos con la carga real
 ```
 
+- **Prescripción** de cada ítem (`app/services/prescripcion.py`), con tres modalidades:
+  - *Series × repeticiones*: `series`, `reps` y opcionalmente `reps_max` para un rango (3 × 8–12).
+  - *Series × tiempo*: `series` y `segundos` (planchas, isométricos: 3 × 15 seg).
+  - *Texto libre*: lo que no encaja (al fallo, pirámide 12-10-8, AMRAP).
+
+  `por_lado` marca los unilaterales (c/lado). `prescripcion` guarda el texto que ve el alumno, armado a partir de los campos. El importador traduce la notación de la planilla (`3x10`, `3x15´´`, `2x10 c/lado`, `1´30´´`), y las rutinas guardadas antes como texto se convierten solas al arrancar.
 - **Publicar** una rutina archiva la que el alumno tenía publicada: tiene una sola vigente a la vez.
-- **Aumento sugerido** (`aumento_pct`, en el editor): al registrar un ejercicio, el alumno ve un botón verde «Hoy hice …» con la carga de la última vez más ese porcentaje, redondeado a medio kilo. Vacío = 1 kg más; 0 = sin sugerencia.
+- **Peso indicado** (`rutina_items.peso_kg`, opcional): el profe lo pone en el editor y el alumno lo ve junto a la prescripción.
+- **Registro**: la ventanita arranca con lo indicado (prescripción y peso), así si lo hizo tal cual solo toca Registrar; si no, lo cambia. El peso real queda en `entrenamiento_items.peso_kg`. El alumno anota cuánto hizo y cómo se sintió (1 a 10, como el esfuerzo del cierre; `entrenamiento_items.esfuerzo`). La app no le sugiere ninguna carga; lo de la última vez aparece solo como referencia. (La columna `rutinas.aumento_pct` quedó de una versión anterior y la interfaz ya no la usa.)
+- **Entrenar**: en la PC (mouse) cada ejercicio tiene un botón verde **▶ Comenzar**; en el celular, deslizar a la derecha hace lo mismo (y sobre uno ya registrado, abre el registro para corregirlo). Comenzar abre la ficha con un cronómetro arriba (en los de tiempo muestra también el objetivo por serie) y desde ahí se registra. El video arranca solo dentro de la ficha (primero el archivo directo de Drive y, si Drive no lo entrega, su visor embebido). Los videos de Drive tienen que estar compartidos con «cualquier persona con el enlace» para verse dentro de la app, sobre todo en el celular.
 - **Superserie**: ítems consecutivos del bloque con el mismo número. En el editor es el botón ⛓ ("unir con el anterior").
 - Al editar una rutina se **preservan los ids** de lo que no cambió, y el historial guarda una copia del nombre del ejercicio: editar o borrar ítems no rompe lo que el alumno ya registró.
 
